@@ -196,11 +196,11 @@ def load_llama_index_from_gcs():
 
 def get_response_from_llm(index: VectorStoreIndex, query: str, n_value: int, custom_qa_template_str: str):
     """
-    LLM (Gemini Pro) を使用して、LlamaIndexのインデックスから回答を生成します。
+    LLM (gemini-2.5-flash-preview-05-20) を使用して、LlamaIndexのインデックスから回答を生成します。
     """
     try:
         # GoogleGenAI LLMを初期化
-        llm = GoogleGenAI(model="gemini-pro")
+        llm = GoogleGenAI(model="gemini-2.5-flash-preview-05-20")
         # カスタムQAプロンプトを適用
         qa_template = PromptTemplate(custom_qa_template_str)
         # クエリエンジンを設定
