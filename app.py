@@ -17,10 +17,6 @@ from google.cloud import storage
 
 # --- ページ設定 (最初に一度だけ呼び出す) ---
 st.set_page_config(page_title="RAGベースQAウェブアプリ (GCS対応)", layout="wide")
-
-if "GOOGLE_CLOUD_LOCATION" in st.secrets:
-    os.environ["GOOGLE_CLOUD_LOCATION"] = st.secrets["GOOGLE_CLOUD_LOCATION"]
-
 # --- 定数定義 ---
 LOCAL_INDEX_DIR = "downloaded_storage"
 DEFAULT_QA_PROMPT = """
@@ -132,7 +128,7 @@ def load_llama_index_from_gcs():
         st.success(f"{download_count} 個のインデックスファイルをGCSからダウンロードしました。")
 
         # 埋め込みモデルを設定
-        Settings.embed_model = GoogleGenAIEmbedding(model_name="gemini-embedding-001", embed_hparams={"output_dimensionality": 1536})
+        Settings.embed_model = GoogleGenAIEmbedding(model_name="models/text-embedding-004", embed_hparams={"output_dimensionality": 1536})
 
         # 埋め込みモデルが機能するかテスト
         try:
