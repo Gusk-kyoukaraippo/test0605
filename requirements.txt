@@ -1,4 +1,6 @@
 streamlit
 llama-index
+llama_index.llms.google_genai
 google-cloud-storage
 google-generativeai
+shutil
