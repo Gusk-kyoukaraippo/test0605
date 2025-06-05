@@ -1,6 +1,8 @@
-streamlit
-llama-index
-llama_index.llms.google_genai
-google-cloud-storage
-google-generativeai
+os
 shutil
+streamlit as st
+json
+llama_index.core
+llama_index.llms.google_genai
+google.cloud
+tempfile
