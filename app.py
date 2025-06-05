@@ -3,6 +3,7 @@ import shutil
 import streamlit as st
 import json
 import tempfile
+import numpy as np # numpyを明示的にインポート
 from llama_index.core import (
     VectorStoreIndex,
     StorageContext,
@@ -41,9 +42,22 @@ DEFAULT_QA_PROMPT = """
 temp_gcs_key_path = None
 try:
     # Streamlit secretsから設定を読み込み
+    # GOOGLE_API_KEYが存在するか確認
+    if "GOOGLE_API_KEY" not in st.secrets:
+        raise KeyError("GOOGLE_API_KEY")
     os.environ["GOOGLE_API_KEY"] = st.secrets["GOOGLE_API_KEY"]
+
+    # GCS関連のシークレットが存在するか確認
+    if "GCS_BUCKET_NAME" not in st.secrets:
+        raise KeyError("GCS_BUCKET_NAME")
     GCS_BUCKET_NAME = st.secrets["GCS_BUCKET_NAME"]
+
+    if "GCS_INDEX_PREFIX" not in st.secrets:
+        raise KeyError("GCS_INDEX_PREFIX")
     GCS_INDEX_PREFIX = st.secrets["GCS_INDEX_PREFIX"]
+
+    if "GCS_SERVICE_ACCOUNT_JSON" not in st.secrets:
+        raise KeyError("GCS_SERVICE_ACCOUNT_JSON")
     gcs_service_account_json_str = st.secrets["GCS_SERVICE_ACCOUNT_JSON"]
 
     # GCSサービスアカウントJSONをパースして一時ファイルに保存
@@ -115,7 +129,19 @@ def load_llama_index_from_gcs():
         st.success(f"{download_count} 個のインデックスファイルをGCSからダウンロードしました。")
 
         # 埋め込みモデルを設定
-        Settings.embed_model = GoogleGenAIEmbedding(model_name="models/embedding-001")
+        Settings.embed_model = GoogleGenAIEmbedding(model_name="models/text-embedding-004")
+
+        # 埋め込みモデルが機能するかテスト
+        try:
+            test_embedding = Settings.embed_model.get_text_embedding("これはテスト文字列です。")
+            if not isinstance(test_embedding, list) or len(test_embedding) == 0:
+                st.error("埋め込みモデルが有効な埋め込みを生成できませんでした。APIキーとモデルへのアクセスを確認してください。")
+                return None
+            st.success("埋め込みモデルが正常に動作することを確認しました。")
+        except Exception as e:
+            st.error(f"埋め込みモデルの初期テスト中にエラーが発生しました: {e}")
+            st.info("APIキー ('GOOGLE_API_KEY') が正しく設定されているか、Gemini Embedding APIへのアクセスが許可されているか確認してください。")
+            return None
 
         # ローカルのインデックスをロード
         storage_context = StorageContext.from_defaults(persist_dir=LOCAL_INDEX_DIR)
@@ -152,7 +178,7 @@ def get_response_from_llm(index: VectorStoreIndex, query: str, n_value: int, cus
     except Exception as e:
         st.error(f"LLMからの応答取得中にエラーが発生しました: {e}")
         st.exception(e)
-        st.info("Gemini APIキーが有効か、選択したモデルが利用可能か確認してください。")
+        st.info("Gemini APIキーが有効か、選択したLLMモデルが利用可能か確認してください。また、LlamaIndexが適切に埋め込みを生成できているか確認してください。")
         return None
 
 # --- 3. Streamlit UIの構築 ---
