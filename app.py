@@ -11,14 +11,13 @@ from llama_index.core import (
 from llama_index.llms.google_genai import GoogleGenAI
 from google.cloud import storage
 import tempfile
-from llama_index.embeddings.gemini import GeminiEmbedding
+from llama_index.embeddings.google import GoogleEmbedding
 
 
 
     #一番最初にst.set_page_config(page_title="RAGベースQAウェブアプリ (GCS対応)", layout="wide")
 st.set_page_config(page_title="RAGベースQAウェブアプリ (GCS対応)", layout="wide")
 
-Settings.embed_model = GeminiEmbedding
 
 # --- 定数定義 ---
 LOCAL_INDEX_DIR = "downloaded_storage"
