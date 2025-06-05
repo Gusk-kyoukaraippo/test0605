@@ -137,6 +137,19 @@ def load_llama_index_from_gcs():
             if not isinstance(test_embedding, list) or len(test_embedding) == 0:
                 st.error("埋め込みモデルが有効な埋め込みを生成できませんでした。APIキーとモデルへのアクセスを確認してください。")
                 return None
+
+                # 期待する次元と一致するか確認
+            expected_dimension = 1536
+            if len(test_embedding) != expected_dimension:
+                st.error(
+                    f"埋め込みモデルが期待される {expected_dimension} 次元ではなく、"
+                    f"{len(test_embedding)} 次元を返しました。モデル設定またはAPIの制限を確認してください。"
+                )
+                st.info(
+                    "`gemini-embedding-exp-03-07` モデルが実際に1536次元の出力をサポートしているか、"
+                    "またはその次元で利用可能か確認してください。"
+                )
+                return None
             st.success("埋め込みモデルが正常に動作することを確認しました。")
         except Exception as e:
             st.error(f"埋め込みモデルの初期テスト中にエラーが発生しました: {e}")
