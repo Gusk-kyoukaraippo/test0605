@@ -6,15 +6,19 @@ from llama_index.core import (
     VectorStoreIndex,
     StorageContext,
     load_index_from_storage,
-    PromptTemplate
+    PromptTemplate, Settings
 )
 from llama_index.llms.google_genai import GoogleGenAI
-from llama_index.embeddings.gemini import GeminiEmbedding
 from google.cloud import storage
 import tempfile
+from llama_index.embeddings.gemini import GeminiEmbedding
+
+
 
     #一番最初にst.set_page_config(page_title="RAGベースQAウェブアプリ (GCS対応)", layout="wide")
 st.set_page_config(page_title="RAGベースQAウェブアプリ (GCS対応)", layout="wide")
+
+Settings.embed_model = GeminiEmbedding
 
 # --- 定数定義 ---
 LOCAL_INDEX_DIR = "downloaded_storage"
@@ -178,6 +182,11 @@ def load_llama_index_from_gcs():
             return None
 
         st.success(f"{download_count} 個のインデックスファイルがGCSから正常にダウンロードされました。")
+
+        # models/text-embedding-004 を使用する場合
+        Settings.embed_model = GoogleEmbedding(model_name="models/text-embedding-004") # ★ この行を追加
+
+
         # ダウンロードしたローカルインデックスをロード
         storage_context = StorageContext.from_defaults(persist_dir=LOCAL_INDEX_DIR)
         index = load_index_from_storage(storage_context)
@@ -197,7 +206,7 @@ def load_llama_index_from_gcs():
 
 def get_response_from_llm(index: VectorStoreIndex, query: str, n_value: int, custom_qa_template_str: str):
     """
-    LLM (gemini-2.5-flash-preview-05-20) を使用して、LlamaIndexのインデックスから回答を生成します。
+    LLM () を使用して、LlamaIndexのインデックスから回答を生成します。
     """
     try:
         # GoogleGenAI LLMを初期化
