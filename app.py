@@ -12,6 +12,9 @@ from llama_index.llms.google_genai import GoogleGenAI
 from google.cloud import storage
 import tempfile
 
+    #一番最初にst.set_page_config(page_title="RAGベースQAウェブアプリ (GCS対応)", layout="wide")
+st.set_page_config(page_title="RAGベースQAウェブアプリ (GCS対応)", layout="wide")
+
 # --- 定数定義 ---
 LOCAL_INDEX_DIR = "downloaded_storage"
 DEFAULT_QA_PROMPT = """
@@ -226,7 +229,7 @@ def main():
     """
     StreamlitアプリケーションのメインUIを構築します。
     """
-    st.set_page_config(page_title="RAGベースQAウェブアプリ (GCS対応)", layout="wide")
+    #st.set_page_config(page_title="RAGベースQAウェブアプリ (GCS対応)", layout="wide")
     st.title("📚 ドキュメントQAボット (GCS連携)")
     st.markdown("""
     このアプリケーションは、Google Cloud Storage (GCS) に保存されたドキュメントのインデックスを利用して、
