@@ -16,7 +16,7 @@ from llama_index.embeddings.google_genai import GoogleGenAIEmbedding
 from google.cloud import storage
 
 # --- ページ設定 (最初に一度だけ呼び出す) ---
-st.set_page_config(page_title="RAGベースQAウェブアプリ (GCS対応)", layout="wide")
+st.set_page_config(page_title="フランケンAIプロンプトテスト", layout="wide")
 # --- 定数定義 ---
 LOCAL_INDEX_DIR = "downloaded_storage"
 DEFAULT_QA_PROMPT = """
@@ -128,7 +128,7 @@ def load_llama_index_from_gcs():
         st.success(f"{download_count} 個のインデックスファイルをGCSからダウンロードしました。")
 
         # 埋め込みモデルを設定
-        Settings.embed_model = GoogleGenAIEmbedding(model_name="models/text-embedding-004", embed_hparams={"output_dimensionality": 1536})
+        Settings.embed_model = GoogleGenAIEmbedding(model_name="models/text-embedding-004", embed_hparams={"output_dimensionality": 768})
 
         # 埋め込みモデルが機能するかテスト
         try:
@@ -198,10 +198,12 @@ def main():
     """
     StreamlitアプリケーションのメインUIを構築します。
     """
-    st.title("📚 ドキュメントQAボット (GCS連携)")
+    st.title("📚 プロンプトテスト")
     st.markdown("""
-    このアプリは、GCSに保存されたドキュメントのインデックスを使い、内容に関する質問に回答します。
-    左のサイドバーで、検索設定やAIへの指示（プロンプト）を調整できます。
+    このアプリは、フランケンラジオをベースにgemini 2.5 flashがお話しします。
+    左のサイドバーの
+                ・上側は何か所から情報を検索するか。数字が1なら、1箇所のみ情報を参照にします
+                ・下側はAIへの指示（プロンプト）を調整できます。
     """)
     st.markdown("---")
 
@@ -226,8 +228,8 @@ def main():
 
         st.header("💬 質問を入力してください")
         user_query = st.text_input(
-            "ドキュメントに関する質問をここに入力してください:",
-            placeholder="例: このドキュメントの主要なテーマは何ですか？"
+            "フランケンAIに投げる質問をここに入力してください:",
+            placeholder="例: 今後のキャリアはどうしたらいいでしょうか？"
         )
 
         if user_query:
