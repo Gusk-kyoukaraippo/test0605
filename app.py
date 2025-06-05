@@ -3,7 +3,7 @@ import shutil
 import streamlit as st
 import json
 import tempfile
-import numpy as np # numpyを明示的にインポート
+import numpy as np
 from llama_index.core import (
     VectorStoreIndex,
     StorageContext,
@@ -17,6 +17,7 @@ from google.cloud import storage
 
 # --- ページ設定 (最初に一度だけ呼び出す) ---
 st.set_page_config(page_title="フランケンAIプロンプトテスト", layout="wide")
+
 # --- 定数定義 ---
 LOCAL_INDEX_DIR = "downloaded_storage"
 DEFAULT_QA_PROMPT = """
@@ -100,77 +101,78 @@ def load_llama_index_from_gcs():
         shutil.rmtree(LOCAL_INDEX_DIR)
     os.makedirs(LOCAL_INDEX_DIR, exist_ok=True)
 
-    st.info(f"GCSバケット '{GCS_BUCKET_NAME}' からインデックスをダウンロード中...")
+    # 初回読み込み時間の提示
+    with st.spinner("初回読み込み中... (約1分かかります)"):
+        st.info(f"GCSバケット '{GCS_BUCKET_NAME}' からインデックスをダウンロード中...")
 
-    try:
-        client = storage.Client()
-        bucket = client.bucket(GCS_BUCKET_NAME)
-        blobs = list(bucket.list_blobs(prefix=GCS_INDEX_PREFIX))
-
-        if not blobs or all(blob.name == GCS_INDEX_PREFIX and blob.size == 0 for blob in blobs):
-            st.warning(f"GCSバケット '{GCS_BUCKET_NAME}' の '{GCS_INDEX_PREFIX}' にインデックスファイルが見つかりません。")
-            return None
-
-        download_count = 0
-        for blob in blobs:
-            if blob.name == GCS_INDEX_PREFIX or blob.name.endswith('/'):
-                continue
-            relative_path = os.path.relpath(blob.name, GCS_INDEX_PREFIX)
-            local_file_path = os.path.join(LOCAL_INDEX_DIR, relative_path)
-            os.makedirs(os.path.dirname(local_file_path), exist_ok=True)
-            blob.download_to_filename(local_file_path)
-            download_count += 1
-
-        if download_count == 0:
-            st.warning(f"GCSの '{GCS_INDEX_PREFIX}' パスにダウンロード可能なファイルが見つかりませんでした。")
-            return None
-
-        st.success(f"{download_count} 個のインデックスファイルをGCSからダウンロードしました。")
-
-        # 埋め込みモデルを設定
-        Settings.embed_model = GoogleGenAIEmbedding(model_name="models/text-embedding-004", embed_hparams={"output_dimensionality": 768})
-
-        # 埋め込みモデルが機能するかテスト
         try:
-            test_embedding = Settings.embed_model.get_text_embedding("これはテスト文字列です。")
-            if not isinstance(test_embedding, list) or len(test_embedding) == 0:
-                st.error("埋め込みモデルが有効な埋め込みを生成できませんでした。APIキーとモデルへのアクセスを確認してください。")
+            client = storage.Client()
+            bucket = client.bucket(GCS_BUCKET_NAME)
+            blobs = list(bucket.list_blobs(prefix=GCS_INDEX_PREFIX))
+
+            if not blobs or all(blob.name == GCS_INDEX_PREFIX and blob.size == 0 for blob in blobs):
+                st.warning(f"GCSバケット '{GCS_BUCKET_NAME}' の '{GCS_INDEX_PREFIX}' にインデックスファイルが見つかりません。")
                 return None
 
-                # 期待する次元と一致するか確認
-            expected_dimension = 768
-            if len(test_embedding) != expected_dimension:
-                st.error(
-                    f"埋め込みモデルが期待される {expected_dimension} 次元ではなく、"
-                    f"{len(test_embedding)} 次元を返しました。モデル設定またはAPIの制限を確認してください。"
-                )
-                st.info(
-                    "`gemini-embedding-exp-03-07` モデルが実際に1536次元の出力をサポートしているか、"
-                    "またはその次元で利用可能か確認してください。"
-                )
+            download_count = 0
+            for blob in blobs:
+                if blob.name == GCS_INDEX_PREFIX or blob.name.endswith('/'):
+                    continue
+                relative_path = os.path.relpath(blob.name, GCS_INDEX_PREFIX)
+                local_file_path = os.path.join(LOCAL_INDEX_DIR, relative_path)
+                os.makedirs(os.path.dirname(local_file_path), exist_ok=True)
+                blob.download_to_filename(local_file_path)
+                download_count += 1
+
+            if download_count == 0:
+                st.warning(f"GCSの '{GCS_INDEX_PREFIX}' パスにダウンロード可能なファイルが見つかりませんでした。")
                 return None
-            st.success("埋め込みモデルが正常に動作することを確認しました。")
+
+            st.success(f"{download_count} 個のインデックスファイルをGCSからダウンロードしました。")
+
+            # 埋め込みモデルを設定
+            Settings.embed_model = GoogleGenAIEmbedding(model_name="models/text-embedding-004", embed_hparams={"output_dimensionality": 768})
+
+            # 埋め込みモデルが機能するかテスト
+            try:
+                test_embedding = Settings.embed_model.get_text_embedding("これはテスト文字列です。")
+                if not isinstance(test_embedding, list) or len(test_embedding) == 0:
+                    st.error("埋め込みモデルが有効な埋め込みを生成できませんでした。APIキーとモデルへのアクセスを確認してください。")
+                    return None
+
+                expected_dimension = 768
+                if len(test_embedding) != expected_dimension:
+                    st.error(
+                        f"埋め込みモデルが期待される {expected_dimension} 次元ではなく、"
+                        f"{len(test_embedding)} 次元を返しました。モデル設定またはAPIの制限を確認してください。"
+                    )
+                    st.info(
+                        "`gemini-embedding-exp-03-07` モデルが実際に1536次元の出力をサポートしているか、"
+                        "またはその次元で利用可能か確認してください。"
+                    )
+                    return None
+                st.success("埋め込みモデルが正常に動作することを確認しました。")
+            except Exception as e:
+                st.error(f"埋め込みモデルの初期テスト中にエラーが発生しました: {e}")
+                st.info("APIキー ('GOOGLE_API_KEY') が正しく設定されているか、Gemini Embedding APIへのアクセスが許可されているか確認してください。")
+                return None
+
+            # ローカルのインデックスをロード
+            storage_context = StorageContext.from_defaults(persist_dir=LOCAL_INDEX_DIR)
+            index = load_index_from_storage(storage_context)
+            st.success("インデックスのロードが完了しました。質問を入力できます。")
+            return index
+
         except Exception as e:
-            st.error(f"埋め込みモデルの初期テスト中にエラーが発生しました: {e}")
-            st.info("APIキー ('GOOGLE_API_KEY') が正しく設定されているか、Gemini Embedding APIへのアクセスが許可されているか確認してください。")
+            st.error(f"GCSからのインデックスロード中にエラーが発生しました: {e}")
+            st.exception(e)
+            st.info(
+                "以下の点を確認してください:\n"
+                f"- GCSバケット名 ('{GCS_BUCKET_NAME}') とプレフィックス ('{GCS_INDEX_PREFIX}') が正しいか。\n"
+                "- 'GCS_SERVICE_ACCOUNT_JSON' が正しく、適切な権限を持っているか。\n"
+                "- インターネット接続が安定しているか。"
+            )
             return None
-
-        # ローカルのインデックスをロード
-        storage_context = StorageContext.from_defaults(persist_dir=LOCAL_INDEX_DIR)
-        index = load_index_from_storage(storage_context)
-        st.success("インデックスのロードが完了しました。質問を入力できます。")
-        return index
-
-    except Exception as e:
-        st.error(f"GCSからのインデックスロード中にエラーが発生しました: {e}")
-        st.exception(e)
-        st.info(
-            "以下の点を確認してください:\n"
-            f"- GCSバケット名 ('{GCS_BUCKET_NAME}') とプレフィックス ('{GCS_INDEX_PREFIX}') が正しいか。\n"
-            "- 'GCS_SERVICE_ACCOUNT_JSON' が正しく、適切な権限を持っているか。\n"
-            "- インターネット接続が安定しているか。"
-        )
-        return None
 
 def get_response_from_llm(index: VectorStoreIndex, query: str, n_value: int, custom_qa_template_str: str):
     """
@@ -200,10 +202,8 @@ def main():
     """
     st.title("📚 プロンプトテスト")
     st.markdown("""
-    このアプリは、フランケンラジオをベースにgemini 2.5 flashがお話しします。
-    左のサイドバーの
-                ・上側は何か所から情報を検索するか。数字が1なら、1箇所のみ情報を参照にします
-                ・下側はAIへの指示（プロンプト）を調整できます。
+    このアプリは、フランケンラジオをベースにGemini 2.5 Flashがお話しします。
+    左のサイドバーの設定で、質問応答の挙動を調整できます。
     """)
     st.markdown("---")
 
@@ -213,35 +213,37 @@ def main():
         st.sidebar.header("⚙️ 高度な設定")
         n_value = st.sidebar.slider(
             "類似ドキュメント検索数 (N値)", 1, 10, 3, 1,
-            help="回答生成の際に参照する、関連性の高いドキュメントの数を指定します。"
+            help="回答生成の際に参照する、関連性の高いドキュメントの数を指定します。" \
+            "約3分の内容がドキュメント1つに相当します"
         )
         st.sidebar.info(f"現在、上位 **{n_value}** 個の関連チャンクを使用して回答を生成します。")
 
         st.sidebar.subheader("📝 カスタムQAプロンプト")
         custom_prompt_text = st.sidebar.text_area(
-            "プロンプトを編集 ({context_str}と{query_str}は必須):",
+            "プロンプトを編集してください:",
             DEFAULT_QA_PROMPT, height=350,
-            help="AIへの指示です。`{context_str}`(参照情報)と`{query_str}`(質問)を含めてください。"
+            help="AIへの指示です。**`{context_str}` (参照情報)** と **`{query_str}` (ユーザーの質問)** は必ず含めてください。これらが含まれていないと、AIは適切に回答を生成できません。"
         )
         st.sidebar.markdown("---")
         st.sidebar.caption("© 2024 RAG Demo")
 
         st.header("💬 質問を入力してください")
         user_query = st.text_input(
-            "フランケンAIに投げる質問をここに入力してください:",
-            placeholder="例: 今後のキャリアはどうしたらいいでしょうか？"
+            "フランケンAIに聞きたいことをここに入力してください:",
+            placeholder="例: 今後のキャリアはどうしたらいいでしょうか？",
+            help="質問を入力してEnterキーを押すか、少し待つと回答が生成されます。"
         )
 
         if user_query:
             if "{context_str}" not in custom_prompt_text or "{query_str}" not in custom_prompt_text:
-                st.warning("プロンプトには`{context_str}`と`{query_str}`の両方を含めてください。")
+                st.warning("プロンプトには`{context_str}`と`{query_str}`の両方を含めてください。これらはAIが参照情報と質問を認識するために必須です。")
             else:
                 response = get_response_from_llm(llama_index, user_query, n_value, custom_prompt_text)
                 if response:
                     st.subheader("🤖 AIからの回答")
                     st.write(str(response))
                     
-                    # 参照ソースの表示（デバッグ用ではなく、ユーザーへの情報提供として）
+                    # 参照ソースの表示
                     if response.source_nodes:
                         with st.expander("参照されたソースを確認"):
                             for i, node in enumerate(response.source_nodes):
@@ -253,12 +255,10 @@ def main():
                                     disabled=True,
                                     key=f"chunk_{i}"
                                 )
-
-
     else:
         st.error(
             "インデックスのロードに失敗したため、QAシステムを起動できませんでした。"
-            "ページ上部のエラーメッセージを確認し、設定やGCSの状態を見直してください。"
+            "ページ上部のエラーメッセージを確認し、**設定やGCSの状態を見直してください**。特に、`secrets.toml`のキーと値が正しいか再確認してください。"
         )
 
 if __name__ == "__main__":
