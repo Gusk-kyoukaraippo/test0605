@@ -11,7 +11,7 @@ from llama_index.core import (
     Settings,
 )
 from llama_index.llms.google_genai import GoogleGenAI
-from llama_index.embeddings.google_genai import GoogleGenAIEmbedding
+#from llama_index.embeddings.google_genai import GoogleGenAIEmbedding
 from google.cloud import storage
 
 # --- ページ設定 (最初に一度だけ呼び出す) ---
