@@ -11,7 +11,7 @@ from llama_index.core import (
     Settings,
 )
 from llama_index.llms.google_genai import GoogleGenAI
-from llama_index.embeddings.google import GoogleEmbedding
+from llama_index.embeddings.google_genai import GoogleGenAIEmbedding
 from google.cloud import storage
 
 # --- ページ設定 (最初に一度だけ呼び出す) ---
@@ -115,7 +115,7 @@ def load_llama_index_from_gcs():
         st.success(f"{download_count} 個のインデックスファイルをGCSからダウンロードしました。")
 
         # 埋め込みモデルを設定
-        Settings.embed_model = GoogleEmbedding(model_name="models/text-embedding-004")
+        embed_model = GoogleGenAIEmbedding(model_name="models/text-embedding-004")
 
         # ローカルのインデックスをロード
         storage_context = StorageContext.from_defaults(persist_dir=LOCAL_INDEX_DIR)
@@ -139,7 +139,7 @@ def get_response_from_llm(index: VectorStoreIndex, query: str, n_value: int, cus
     LLMを使用して、LlamaIndexのインデックスから回答を生成します。
     """
     try:
-        llm = GoogleGenAI(model="models/gemini-1.5-flash-latest")
+        llm = GoogleGenAI(model="gemini-2.5-flash-preview-05-20")
         qa_template = PromptTemplate(custom_qa_template_str)
         query_engine = index.as_query_engine(
             llm=llm,
