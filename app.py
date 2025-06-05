@@ -115,7 +115,7 @@ def load_llama_index_from_gcs():
         st.success(f"{download_count} 個のインデックスファイルをGCSからダウンロードしました。")
 
         # 埋め込みモデルを設定
-        embed_model = GoogleGenAIEmbedding(model_name="models/text-embedding-004")
+        Settings.embed_model = GoogleGenAIEmbedding(model_name="models/text-embedding-004")
 
         # ローカルのインデックスをロード
         storage_context = StorageContext.from_defaults(persist_dir=LOCAL_INDEX_DIR)
