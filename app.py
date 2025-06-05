@@ -138,7 +138,7 @@ def load_llama_index_from_gcs():
                 return None
 
                 # 期待する次元と一致するか確認
-            expected_dimension = 1536
+            expected_dimension = 768
             if len(test_embedding) != expected_dimension:
                 st.error(
                     f"埋め込みモデルが期待される {expected_dimension} 次元ではなく、"
