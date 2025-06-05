@@ -2,3 +2,4 @@ streamlit
 llama_index.core
 llama_index.llms.google_genai
 google.cloud
+google-cloud-storage
