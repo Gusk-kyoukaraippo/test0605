@@ -1,6 +1,6 @@
 os
 shutil
-streamlit as st
+streamlit
 json
 llama_index.core
 llama_index.llms.google_genai
