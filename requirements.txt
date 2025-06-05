@@ -1,4 +1,3 @@
-shutil
 streamlit
 json
 llama_index.core
