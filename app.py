@@ -9,6 +9,7 @@ from llama_index.core import (
     PromptTemplate
 )
 from llama_index.llms.google_genai import GoogleGenAI
+from llama_index.embeddings.gemini import GeminiEmbedding
 from google.cloud import storage
 import tempfile
 
