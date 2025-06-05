@@ -18,6 +18,9 @@ from google.cloud import storage
 # --- ページ設定 (最初に一度だけ呼び出す) ---
 st.set_page_config(page_title="RAGベースQAウェブアプリ (GCS対応)", layout="wide")
 
+if "GOOGLE_CLOUD_LOCATION" in st.secrets:
+    os.environ["GOOGLE_CLOUD_LOCATION"] = st.secrets["GOOGLE_CLOUD_LOCATION"]
+
 # --- 定数定義 ---
 LOCAL_INDEX_DIR = "downloaded_storage"
 DEFAULT_QA_PROMPT = """
