@@ -1,6 +1,6 @@
 streamlit
 llama_index.core
 llama_index.llms.google_genai
-llama_index.embeddings.google_genai
+llama-index-embeddings-google-genai
 google.cloud
 google-cloud-storage
