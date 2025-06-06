@@ -3,7 +3,7 @@ import shutil
 import streamlit as st
 import json
 import tempfile
-import numpy as np
+import numpy as np # この行は使用されていないようですが、元のコードにあったので残します。
 from llama_index.core import (
     VectorStoreIndex,
     StorageContext,
@@ -12,20 +12,23 @@ from llama_index.core import (
     Settings,
 )
 from llama_index.llms.google_genai import GoogleGenAI
-from llama_index.embeddings.google_genai import GoogleGenAIEmbedding
+# OpenAIEmbedding をインポートするために、GoogleGenAIEmbedding のインポートをコメントアウトまたは削除し、OpenAIEmbedding を追加します。
+# from llama_index.embeddings.google_genai import GoogleGenAIEmbedding 
+from llama_index.embeddings.openai import OpenAIEmbedding # ★ここをOpenAIEmbeddingに変更
+
 from google.cloud import storage
 
 # --- ページ設定 (最初に一度だけ呼び出す) ---
 st.set_page_config(page_title="フランケンAIプロンプトテスト", layout="wide")
 
 # --- 定数定義 ---
-LOCAL_INDEX_DIR = "downloaded_storage"
+LOCAL_INDEX_DIR = "downloaded_storage_openai_embed" # インデックス保存ディレクトリ名を変更し、区別します
 DEFAULT_QA_PROMPT = """
 あなたは、提供された「参照情報」に基づいて、ユーザーの「質問」に明確かつ簡潔に回答するAIアシスタントです。
 以下の指示に従って回答を生成してください:
 
 1.  「参照情報」からユーザーの「質問」に「最終回答」を1～2文で作ってください
-2.  「最終回答」と「質問」を結ぶ説明を「参照情報」を参考にしつつ、オリジナルで作成してください
+2.  「質問」と「最終回答」とを結ぶ解説を「参照情報」を参考にしつつ、オリジナルで作成してください
 
 参照情報:
 ---------------------
@@ -42,10 +45,16 @@ DEFAULT_QA_PROMPT = """
 temp_gcs_key_path = None
 try:
     # Streamlit secretsから設定を読み込み
-    # GOOGLE_API_KEYが存在するか確認
+    # GOOGLE_API_KEYが存在するか確認 (Gemini LLM用)
     if "GOOGLE_API_KEY" not in st.secrets:
         raise KeyError("GOOGLE_API_KEY")
     os.environ["GOOGLE_API_KEY"] = st.secrets["GOOGLE_API_KEY"]
+
+    # ★OpenAI APIキーの追加
+    if "OPENAI_API_KEY" not in st.secrets:
+        raise KeyError("OPENAI_API_KEY")
+    os.environ["OPENAI_API_KEY"] = st.secrets["OPENAI_API_KEY"]
+
 
     # GCS関連のシークレットが存在するか確認
     if "GCS_BUCKET_NAME" not in st.secrets:
@@ -75,13 +84,13 @@ try:
     # 一時ファイルに認証情報を書き出し、環境変数にパスを設定
     with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".json", encoding="utf-8") as tmp_file:
         tmp_file.write(clean_json_str)
-        temp_gcs_key_path = tmp_file.name
-    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = temp_gcs_key_path
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = tmp_file.name # temp_gcs_key_path は不要になったため直接代入
+    temp_gcs_key_path = tmp_file.name # 後でファイルを削除するためにパスを保持
 
 except KeyError as e:
     st.error(
         f"必要な設定が secrets.toml に見つかりません: {e}。"
-        "GOOGLE_API_KEY, GCS_BUCKET_NAME, GCS_INDEX_PREFIX, GCS_SERVICE_ACCOUNT_JSON を設定してください。"
+        "GOOGLE_API_KEY, OPENAI_API_KEY, GCS_BUCKET_NAME, GCS_INDEX_PREFIX, GCS_SERVICE_ACCOUNT_JSON を設定してください。"
     )
     st.stop()
 except Exception as e:
@@ -102,7 +111,7 @@ def load_llama_index_from_gcs():
     os.makedirs(LOCAL_INDEX_DIR, exist_ok=True)
 
     # 初回読み込み時間の提示
-    with st.info("初回読み込み中... (約1分かかります)"):
+    with st.spinner("初回読み込み中... (約1分かかります)"):
         st.info(f"GCSバケット '{GCS_BUCKET_NAME}' からインデックスをダウンロード中...")
 
         try:
@@ -130,8 +139,10 @@ def load_llama_index_from_gcs():
 
             st.success(f"{download_count} 個のインデックスファイルをGCSからダウンロードしました。")
 
-            # 埋め込みモデルを設定
-            Settings.embed_model = GoogleGenAIEmbedding(model_name="models/text-embedding-004", embed_hparams={"output_dimensionality": 768})
+            # ★埋め込みモデルを設定をOpenAI Embeddingに変更
+            Settings.embed_model = OpenAIEmbedding(model="text-embedding-3-large", dimensions=3072)
+            st.info(f"埋め込みモデル: **{Settings.embed_model.model_name}** (次元: **{Settings.embed_model.dimensions}**) を使用します。")
+
 
             # 埋め込みモデルが機能するかテスト
             try:
@@ -140,21 +151,21 @@ def load_llama_index_from_gcs():
                     st.error("埋め込みモデルが有効な埋め込みを生成できませんでした。APIキーとモデルへのアクセスを確認してください。")
                     return None
 
-                expected_dimension = 768
+                expected_dimension = 3072 # ★期待される次元数を3072に変更
                 if len(test_embedding) != expected_dimension:
                     st.error(
                         f"埋め込みモデルが期待される {expected_dimension} 次元ではなく、"
                         f"{len(test_embedding)} 次元を返しました。モデル設定またはAPIの制限を確認してください。"
                     )
                     st.info(
-                        "`gemini-embedding-exp-03-07` モデルが実際に1536次元の出力をサポートしているか、"
+                        "`text-embedding-3-large` モデルが実際に3072次元の出力をサポートしているか、"
                         "またはその次元で利用可能か確認してください。"
                     )
                     return None
                 st.success("埋め込みモデルが正常に動作することを確認しました。")
             except Exception as e:
                 st.error(f"埋め込みモデルの初期テスト中にエラーが発生しました: {e}")
-                st.info("APIキー ('GOOGLE_API_KEY') が正しく設定されているか、Gemini Embedding APIへのアクセスが許可されているか確認してください。")
+                st.info("APIキー ('OPENAI_API_KEY') が正しく設定されているか、OpenAI Embedding APIへのアクセスが許可されているか確認してください。")
                 return None
 
             # ローカルのインデックスをロード
@@ -173,13 +184,18 @@ def load_llama_index_from_gcs():
                 "- インターネット接続が安定しているか。"
             )
             return None
+        finally:
+            # 一時ファイルを削除 (念のため、Streamlitアプリの実行が終了するまで残る可能性があります)
+            if temp_gcs_key_path and os.path.exists(temp_gcs_key_path):
+                os.remove(temp_gcs_key_path)
 
 def get_response_from_llm(index: VectorStoreIndex, query: str, n_value: int, custom_qa_template_str: str):
     """
     LLMを使用して、LlamaIndexのインデックスから回答を生成します。
     """
     try:
-        llm = GoogleGenAI(model="gemini-2.5-flash-preview-05-20")
+        # LLMはGeminiのまま変更なし
+        llm = GoogleGenAI(model="gemini-2.5-flash-preview-05-20") 
         qa_template = PromptTemplate(custom_qa_template_str)
         query_engine = index.as_query_engine(
             llm=llm,
@@ -202,10 +218,13 @@ def main():
     """
     st.title("📚 プロンプトテスト")
     st.markdown("""
-    このアプリは、フランケンラジオAIのプロンプトテスト用に作りました。
+                ##初回読み込みに1分ほどかかります
+    このアプリは、フランケンラジオAIのプロンプトテストが出来ます。
     notebookLMと違い、左のサイドバーの設定で質問応答の挙動を調整できます。
-    上段のドキュメント数では、参照情報を何か所とするか設定できます。
-    下段ではプロンプトを設定できます。
+    設定項目は3つあります。
+    左うえ段のは、何か所から参照情報を入手するか設定できます。(1カ所で3分の内容)
+    左した段ではプロンプトを設定できます。
+    左の設定後、ユーザーの質問に記入してエンターを押してください
     """)
     st.markdown("---")
 
@@ -217,7 +236,7 @@ def main():
             "類似ドキュメント検索数 (N値)", 1, 10, 3, 1,
             help="回答生成の際に参照する、関連性の高いドキュメントの数を指定します。約3分の内容がドキュメント1つに相当します"
         )
-        st.sidebar.info(f"現在、上位 **{n_value}** 個の関連チャンクを使用して回答を生成します。")
+        st.sidebar.info(f"ドキュメント1つが約3分の内容に相当します。現在、上位 **{n_value}** 個の関連内容を使用して回答を生成します。")
 
         st.sidebar.subheader("📝 カスタムQAプロンプト")
         custom_prompt_text = st.sidebar.text_area(
