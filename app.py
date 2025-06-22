@@ -85,7 +85,6 @@ try:
 
     try:
         parsed_json = json.loads(gcs_service_account_json_str)
-        # ★ 修正点: サービスアカウント情報からプロジェクトIDを抽出
         project_id = parsed_json.get("project_id")
         if not project_id:
             raise ValueError("サービスアカウントJSONに 'project_id' が見つかりません。")
@@ -100,32 +99,41 @@ try:
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = tmp_file.name
     temp_gcs_key_path = tmp_file.name
 
-    # --- ★ ロギング設定をここで行う ---
+    # --- ロギング設定 ---
     # Streamlitの再実行時にハンドラーが重複して追加されるのを防ぐ
     if not logger.handlers:
         logger.setLevel(logging.INFO)
         formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
         
-        # 1. ファイルハンドラー (ローカル用)
+        # ファイルハンドラー (ローカル用)
         fh = logging.FileHandler("app.log", encoding='utf-8')
         fh.setFormatter(formatter)
         logger.addHandler(fh)
         
-        # 2. ストリームハンドラー (Streamlitコンソール用)
+        # ストリームハンドラー (Streamlitコンソール用)
         sh = logging.StreamHandler()
         sh.setFormatter(formatter)
         logger.addHandler(sh)
 
-        # 3. Google Cloud Loggingハンドラーの追加
+        # --- ★ デバッグメッセージ追加 ---
+        # Google Cloud Loggingハンドラーの追加
+        st.info("Google Cloud Loggingに接続試行中...")
         try:
-            # ★ 修正点: 抽出したプロジェクトIDをクライアントに渡す
             client = google_logging.Client(project=project_id)
             handler = CloudLoggingHandler(client, name="franken-ai-prompt-test")
             handler.setFormatter(formatter)
             logger.addHandler(handler)
-            logger.info("Google Cloud Loggingハンドラーのセットアップが完了しました。")
+            
+            # ★ UIとログの両方に成功メッセージを表示
+            success_message = "Google Cloud Loggingに接続しました。"
+            st.success(success_message)
+            logger.info(success_message)
+            
         except Exception as e:
-            logger.warning(f"Google Cloud Loggingとの連携に失敗しました: {e}")
+            # ★ UIとログの両方に失敗メッセージを表示
+            error_message = f"Google Cloud Loggingとの連携に失敗しました: {e}"
+            st.warning(error_message)
+            logger.warning(error_message)
 
 except KeyError as e:
     st.error(
