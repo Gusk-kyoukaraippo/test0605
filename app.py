@@ -56,6 +56,9 @@ if 'last_query' not in st.session_state:
     st.session_state.last_query = ""
 if 'last_response' not in st.session_state:
     st.session_state.last_response = ""
+if 'source_nodes' not in st.session_state:
+    st.session_state.source_nodes = []
+
 
 @st.cache_resource
 def setup_gcp_services():
@@ -237,13 +240,15 @@ def main():
             key="user_query_input"
         )
 
-        if user_query and user_query != st.session_state.get('last_query'):
-            st.session_state.feedback_submitted = False
+        # --- 新しい質問が入力された場合のみ、LLMに問い合わせる ---
+        if user_query and user_query != st.session_state.last_query:
             st.session_state.last_query = user_query
+            st.session_state.feedback_submitted = False  # 新しい質問なのでフィードバック状態をリセット
 
-        if user_query:
             if "{context_str}" not in custom_prompt_text or "{query_str}" not in custom_prompt_text:
                 st.warning("プロンプトには`{context_str}`と`{query_str}`の両方を含めてください。")
+                st.session_state.last_response = ""
+                st.session_state.source_nodes = []
             else:
                 logger.info("="*50)
                 logger.info(f"新しいクエリの処理を開始します: [入力文] {user_query}")
@@ -252,66 +257,76 @@ def main():
                 response = get_response_from_llm(llama_index, user_query, n_value, custom_prompt_text)
 
                 if response:
+                    # 結果をセッションステートに保存
                     st.session_state.last_response = str(response)
-
-                    st.subheader("🤖 AIからの回答")
-                    st.write(str(response))
+                    st.session_state.source_nodes = response.source_nodes
                     
-                    logger.info(f"[LLMからの回答] {str(response)}")
-
+                    # ログ記録もこのタイミングで一度だけ行う
+                    logger.info(f"[LLMからの回答] {st.session_state.last_response}")
                     if response.source_nodes:
                         logger.info("--- 選択されたチャンク（回答根拠） ---")
-                        with st.expander("参照されたソースを確認"):
-                            for i, node in enumerate(response.source_nodes):
-                                source_text = f"ソース {i+1} (関連度: {node.score:.4f})"
-                                st.markdown(f"--- **{source_text}** ---")
-                                st.text_area(
-                                    label=f"ソース {i+1} の内容",
-                                    value=node.text,
-                                    height=150,
-                                    disabled=True,
-                                    key=f"chunk_{i}"
-                                )
-                                logger.info(f"[{source_text}] {node.text.replace('\n', ' ')}")
+                        for i, node in enumerate(response.source_nodes):
+                            source_text = f"ソース {i+1} (関連度: {node.score:.4f})"
+                            logger.info(f"[{source_text}] {node.text.replace('\n', ' ')}")
                         logger.info("--- チャンクのログ記録終了 ---")
                     else:
                         logger.warning("参照されたソースノードが見つかりませんでした。")
-
-                    st.markdown("---")
-                    st.subheader("📝 この回答についての感想")
-
-                    if st.session_state.feedback_submitted:
-                        st.success("フィードバックを記録しました。ありがとうございます！")
-                    else:
-                        with st.form(key='feedback_form'):
-                            st.write("各項目について5段階で評価してください。")
-                            
-                            busso_doai = st.slider("1. 物騒度合い (1: 穏やか 〜 5: 過激)", 1, 5, 3)
-                            datousei = st.slider("2. 質問への返答の妥当性 (1: 不適切 〜 5: 完璧)", 1, 5, 3)
-                            igaisei = st.slider("3. 意外性 (1: 予測通り 〜 5: 驚き)", 1, 5, 3)
-                            humor = st.slider("4. ユーモア (1: 皆無 〜 5: 爆笑)", 1, 5, 3)
-
-                            feedback_comment = st.text_area(
-                                "その他、コメントがあればご記入ください:",
-                                placeholder="例：回答が的確だった、もっと具体的にしてほしかったなど"
-                            )
-                            submit_button = st.form_submit_button(label='フィードバックを送信')
-
-                            if submit_button:
-                                logger.info("--- ユーザーからの感想 ---")
-                                logger.info(f"[対象の質問] {st.session_state.last_query}")
-                                logger.info(f"[対象の回答] {st.session_state.last_response}")
-                                logger.info(f"[評価 - 物騒度合い] {busso_doai}")
-                                logger.info(f"[評価 - 妥当性] {datousei}")
-                                logger.info(f"[評価 - 意外性] {igaisei}")
-                                logger.info(f"[評価 - ユーモア] {humor}")
-                                logger.info(f"[コメント] {feedback_comment.replace('\n', ' ')}")
-                                logger.info("--- 感想のログ記録終了 ---")
-                                
-                                st.session_state.feedback_submitted = True
-                                st.rerun()
                 else:
+                    st.session_state.last_response = ""
+                    st.session_state.source_nodes = []
                     logger.error("LLMからの応答がありませんでした。")
+
+        # --- 回答がセッションに存在する場合、UIに表示する ---
+        if st.session_state.last_response:
+            st.subheader("🤖 AIからの回答")
+            st.write(st.session_state.last_response)
+
+            if st.session_state.source_nodes:
+                with st.expander("参照されたソースを確認"):
+                    for i, node in enumerate(st.session_state.source_nodes):
+                        source_text = f"ソース {i+1} (関連度: {node.score:.4f})"
+                        st.markdown(f"--- **{source_text}** ---")
+                        st.text_area(
+                            label=f"ソース {i+1} の内容",
+                            value=node.text,
+                            height=150,
+                            disabled=True,
+                            key=f"chunk_{i}"
+                        )
+
+            st.markdown("---")
+            st.subheader("📝 この回答についての感想")
+
+            if st.session_state.feedback_submitted:
+                st.success("フィードバックを記録しました。ありがとうございます！")
+            else:
+                with st.form(key='feedback_form'):
+                    st.write("各項目について5段階で評価してください。")
+                    
+                    busso_doai = st.slider("1. 物騒度合い (1: 穏やか 〜 5: 過激)", 1, 5, 3)
+                    datousei = st.slider("2. 質問への返答の妥当性 (1: 不適切 〜 5: 完璧)", 1, 5, 3)
+                    igaisei = st.slider("3. 意外性 (1: 予測通り 〜 5: 驚き)", 1, 5, 3)
+                    humor = st.slider("4. ユーモア (1: 皆無 〜 5: 爆笑)", 1, 5, 3)
+
+                    feedback_comment = st.text_area(
+                        "その他、コメントがあればご記入ください:",
+                        placeholder="例：回答が的確だった、もっと具体的にしてほしかったなど"
+                    )
+                    submit_button = st.form_submit_button(label='フィードバックを送信')
+
+                    if submit_button:
+                        logger.info("--- ユーザーからの感想 ---")
+                        logger.info(f"[対象の質問] {st.session_state.last_query}")
+                        logger.info(f"[対象の回答] {st.session_state.last_response}")
+                        logger.info(f"[評価 - 物騒度合い] {busso_doai}")
+                        logger.info(f"[評価 - 妥当性] {datousei}")
+                        logger.info(f"[評価 - 意外性] {igaisei}")
+                        logger.info(f"[評価 - ユーモア] {humor}")
+                        logger.info(f"[コメント] {feedback_comment.replace('\n', ' ')}")
+                        logger.info("--- 感想のログ記録終了 ---")
+                        
+                        st.session_state.feedback_submitted = True
+                        st.rerun()
 
     else:
         st.error(
