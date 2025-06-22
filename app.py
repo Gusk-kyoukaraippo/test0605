@@ -27,22 +27,47 @@ logger = logging.getLogger(__name__)
 
 LOCAL_INDEX_DIR = "downloaded_storage_openai_embed"
 
-# [変更] ペルソナ設定を「システムプロンプト」として分離
+# [変更] ペルソナ設定とJSON出力形式を指示するシステムプロンプト
 SYSTEM_PROMPT = """
 あなたは、参照情報の話者である「フランケン」というキャラクターです。常にフランケンとして、以下の厳格なルールに従って応答してください。
+
+# キャラクター設定
 1.  率直かつ物議を醸すような、刺々しい意見を述べなさい。
 2.  まず最初に、常識から外れたエキセントリックな結論を断定的に提示しなさい。
 3.  その後、その結論が実は的を射たものであることを、平易な言葉で論理的に説明し、質問者を納得させなさい。
 4.  参照情報がある場合は、その内容を自身の知識であるかのように自然に会話に織り交ぜなさい。
+
+# 出力形式
+あなたの応答は、必ず以下のJSON形式に従ってください。他の形式は一切認められません。
+
+```json
+{
+  "response": "ここに、上記のキャラクター設定に従って生成したユーザー向けの回答を記述します。",
+  "reasoning": "ここには、なぜその回答を生成したのか、あなたの思考プロセスを開発者向けに簡潔に記述します。例えば、どの参照情報を重視したか、どのような論理で結論に至ったかなどを含めてください。"
+}
+```
 """
 
-# [変更] コンテキストプロンプトは参照情報のフォーマットに特化させる
+# 検索した情報をLLMに渡す際のプロンプト
 CONTEXT_PROMPT_TEMPLATE = """
 参照情報:
 ---------------------
 {context_str}
 ---------------------
 上記の参照情報を踏まえて、ユーザーの質問に答えなさい。
+"""
+
+# 会話履歴を元に検索クエリを再生成するためのプロンプト
+CONDENSE_QUESTION_PROMPT_TEMPLATE = """
+チャット履歴と最後の質問が与えられます。チャット履歴の文脈を使って、関連する会話を盛り込んだスタンドアロンの質問に変換してください。
+
+チャット履歴:
+---------------------
+{chat_history}
+---------------------
+最後の質問: {question}
+
+スタンドアロンの質問:
 """
 
 # --- 1. 設定と初期化処理 ---
@@ -127,20 +152,21 @@ def load_llama_index_from_gcs(_gcs_client: storage.Client, bucket_name: str, ind
             st.error(f"GCSからのインデックスロード中にエラーが発生しました: {e}")
             return None
 
-# [変更] get_chat_responseに関数を渡すように変更
-def get_chat_response(index: VectorStoreIndex, query: str, chat_history: list, n_value: int, system_prompt: str, context_prompt_template: str):
+def get_chat_response(index: VectorStoreIndex, query: str, chat_history: list, n_value: int, system_prompt: str, context_prompt_template: str, condense_prompt_template: str):
     try:
-        llm = GoogleGenAI(model="gemini-1.5-flash-latest")
+        llm = GoogleGenAI(model="gemini-2.5-flash-lite-preview-06-17")
         context_template = PromptTemplate(context_prompt_template)
+        condense_template = PromptTemplate(condense_prompt_template)
         
         llama_chat_history = [ChatMessage(role=m["role"], content=m["content"]) for m in chat_history]
 
         chat_engine = index.as_chat_engine(
             llm=llm,
             similarity_top_k=n_value,
-            chat_mode="context",
-            system_prompt=system_prompt,  # [変更] system_prompt を指定
-            context_prompt=context_template, # [変更] context_prompt を指定
+            chat_mode="condense_plus_context",
+            system_prompt=system_prompt,
+            context_prompt=context_template,
+            condense_prompt=condense_template
         )
         with st.spinner('AIが回答を生成中です...'):
             response = chat_engine.chat(query, chat_history=llama_chat_history)
@@ -171,8 +197,7 @@ def main():
 
     if llama_index:
         st.sidebar.header("⚙️ 高度な設定")
-        # [変更] サイドバーでシステムプロンプトを編集可能にする
-        custom_system_prompt = st.sidebar.text_area("システムプロンプト (ペルソナ設定):", SYSTEM_PROMPT, height=250)
+        custom_system_prompt = st.sidebar.text_area("システムプロンプト (ペルソナ設定):", SYSTEM_PROMPT, height=400)
         n_value = st.sidebar.slider("類似ドキュメント検索数 (N値)", 1, 10, 3, 1)
 
         chat_container = st.container()
@@ -201,23 +226,55 @@ def main():
                 with st.chat_message("assistant"):
                     message_placeholder = st.empty()
                     
-                    # [変更] システムプロンプトを渡すように変更
                     response_obj = get_chat_response(
                         index=llama_index,
                         query=prompt,
                         chat_history=st.session_state.messages[:-1],
                         n_value=n_value,
                         system_prompt=custom_system_prompt,
-                        context_prompt_template=CONTEXT_PROMPT_TEMPLATE
+                        context_prompt_template=CONTEXT_PROMPT_TEMPLATE,
+                        condense_prompt_template=CONDENSE_QUESTION_PROMPT_TEMPLATE
                     )
 
                     if response_obj:
-                        full_response = str(response_obj)
-                        message_placeholder.markdown(full_response)
+                        full_response_text = ""
+                        reasoning_text = ""
+                        
+                        # [変更] LLMからの応答をJSONとしてパース
+                        try:
+                            # ```json ... ``` のようなマークダウンブロックを削除
+                            raw_json = response_obj.response.strip().replace("```json", "").replace("```", "")
+                            parsed_response = json.loads(raw_json)
+                            full_response_text = parsed_response.get("response", "回答の取得に失敗しました。")
+                            reasoning_text = parsed_response.get("reasoning", "理由の取得に失敗しました。")
+                        except (json.JSONDecodeError, AttributeError) as e:
+                            logger.warning(f"LLMの応答のJSONパースに失敗しました: {e}", extra={'json_fields': {'response_text': response_obj.response}})
+                            full_response_text = str(response_obj.response) # パース失敗時はそのまま表示
+                            reasoning_text = "JSONパース失敗"
+
+                        message_placeholder.markdown(full_response_text)
                         st.session_state.last_response_obj = response_obj
-                        log_extra_assistant = { 'json_fields': { 'conversation_id': st.session_state.conversation_id, 'request_id': turn_id, 'response': full_response } }
-                        logger.info("LLMからの回答を記録しました。", extra=log_extra_assistant)
-                        st.session_state.messages.append({"role": "assistant", "content": full_response})
+                        
+                        source_nodes_for_log = [
+                            {"text": node.text, "score": node.score} for node in response_obj.source_nodes
+                        ]
+                        chat_history_for_log = st.session_state.messages[:-1]
+
+                        # [変更] ログにreasoningを追加
+                        log_extra_assistant = {
+                            'json_fields': {
+                                'conversation_id': st.session_state.conversation_id,
+                                'request_id': turn_id,
+                                'query': prompt,
+                                'response': full_response_text,
+                                'reasoning': reasoning_text, # 生成理由を記録
+                                'source_nodes': source_nodes_for_log,
+                                'chat_history': chat_history_for_log,
+                            }
+                        }
+                        logger.info("LLMからの回答と関連情報を記録しました。", extra=log_extra_assistant)
+                        
+                        st.session_state.messages.append({"role": "assistant", "content": full_response_text})
                     else:
                         error_message = "エラーにより回答を生成できませんでした。"
                         message_placeholder.error(error_message)
