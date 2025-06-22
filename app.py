@@ -3,7 +3,7 @@ import shutil
 import streamlit as st
 import json
 import logging
-import uuid  # ★ ユニークIDを生成するためにインポート
+import uuid
 
 from llama_index.core import (
     VectorStoreIndex,
@@ -12,6 +12,7 @@ from llama_index.core import (
     PromptTemplate,
     Settings,
 )
+from llama_index.core.llms import ChatMessage  # ★ チャット履歴のためにインポート
 from llama_index.llms.google_genai import GoogleGenAI
 from llama_index.embeddings.openai import OpenAIEmbedding
 
@@ -20,11 +21,12 @@ from google.cloud import logging as google_logging
 from google.cloud.logging.handlers import CloudLoggingHandler
 from google.oauth2 import service_account
 
-st.set_page_config(page_title="フランケンAIプロンプトテスト", layout="wide")
+st.set_page_config(page_title="フランケンAIプロンプトテスト(チャット版)", layout="wide")
 logger = logging.getLogger(__name__)
 
 LOCAL_INDEX_DIR = "downloaded_storage_openai_embed"
-DEFAULT_QA_PROMPT = """
+# 既存のプロンプトをそのまま context_prompt として利用
+DEFAULT_CONTEXT_PROMPT = """
 あなたは、提供された「参照情報」に基づいて、ユーザーの「質問」に回答するAIアシスタントです。
 以下の指示に従って回答を生成してください:
 1.  参照情報の話者であるフランケンとして答えてください
@@ -39,26 +41,25 @@ DEFAULT_QA_PROMPT = """
 回答:
 """
 
-# --- 1. 設定と初期化処理 ---
+# --- 1. 設定と初期化処理 (チャット対応) ---
+# [変更] 会話履歴(messages)と会話ID(conversation_id)をセッションステートに追加 
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+if "conversation_id" not in st.session_state:
+    st.session_state.conversation_id = None
+if 'request_id' not in st.session_state: # 各ターンのIDとして利用
+    st.session_state.request_id = None
 if 'feedback_submitted' not in st.session_state:
     st.session_state.feedback_submitted = False
-if 'last_query' not in st.session_state:
-    st.session_state.last_query = ""
-if 'last_response' not in st.session_state:
-    st.session_state.last_response = ""
-if 'source_nodes' not in st.session_state:
-    st.session_state.source_nodes = []
-# ★ リクエストIDをセッションステートで管理
-if 'request_id' not in st.session_state:
-    st.session_state.request_id = None
+# [変更] 最新のLLM応答オブジェクトを保持するために追加
+if 'last_response_obj' not in st.session_state:
+    st.session_state.last_response_obj = None
 
-# ★ コンソール出力でもリクエストIDを見やすくするためのカスタムフォーマッター
+# ★ ロギングフォーマッター (変更なし)
 class RequestIdFormatter(logging.Formatter):
     def format(self, record):
-        # extraで渡された辞書をログメッセージに含める
         log_message = super().format(record)
         if hasattr(record, 'json_fields'):
-            # json_fieldsの内容を追記
             log_message += f" {record.json_fields}"
         return log_message
 
@@ -82,16 +83,13 @@ def setup_gcp_services():
     
     logger.setLevel(logging.INFO)
     
-    # ストリームハンドラー (コンソール出力用)
     sh = logging.StreamHandler()
-    # ★ カスタムフォーマッターを設定
     sh.setFormatter(RequestIdFormatter("%(asctime)s - %(levelname)s - %(message)s"))
     logger.addHandler(sh)
 
-    # Cloud Logging ハンドラー
     try:
         client = google_logging.Client(credentials=credentials, project=project_id)
-        handler = CloudLoggingHandler(client, name="franken-ai-prompt-test")
+        handler = CloudLoggingHandler(client, name="franken-ai-prompt-test-chat")
         logger.addHandler(handler)
         logger.info("Google Cloud Loggingに接続しました。")
     except Exception as e:
@@ -100,7 +98,6 @@ def setup_gcp_services():
     gcs_client = storage.Client(credentials=credentials, project=project_id)
     return gcs_client
 
-# (load_llama_index_from_gcs, get_response_from_llm は変更なし)
 @st.cache_resource
 def load_llama_index_from_gcs(_gcs_client: storage.Client, bucket_name: str, index_prefix: str):
     if os.path.exists(LOCAL_INDEX_DIR):
@@ -126,21 +123,32 @@ def load_llama_index_from_gcs(_gcs_client: storage.Client, bucket_name: str, ind
             st.error(f"GCSからのインデックスロード中にエラーが発生しました: {e}")
             return None
 
-def get_response_from_llm(index: VectorStoreIndex, query: str, n_value: int, custom_qa_template_str: str):
+# [変更] LLM応答取得関数をクエリエンジンからチャットエンジンに変更 
+def get_chat_response(index: VectorStoreIndex, query: str, chat_history: list, n_value: int, custom_context_prompt_str: str):
     try:
         llm = GoogleGenAI(model="gemini-1.5-flash-latest")
-        qa_template = PromptTemplate(custom_qa_template_str)
-        query_engine = index.as_query_engine(llm=llm, similarity_top_k=n_value, text_qa_template=qa_template)
+        context_template = PromptTemplate(custom_context_prompt_str)
+        
+        # LlamaIndexが要求するChatMessage形式に履歴を変換
+        llama_chat_history = [ChatMessage(role=m["role"], content=m["content"]) for m in chat_history]
+
+        # as_chat_engineに変更し、会話の文脈を考慮 
+        chat_engine = index.as_chat_engine(
+            llm=llm,
+            similarity_top_k=n_value,
+            chat_mode="context",
+            context_prompt=context_template, # カスタムプロンプトを適用
+        )
         with st.spinner('AIが回答を生成中です...'):
-            response = query_engine.query(query)
+            response = chat_engine.chat(query, chat_history=llama_chat_history)
         return response
     except Exception as e:
         st.error(f"LLMからの応答取得中にエラーが発生しました: {e}")
         return None
 
 def main():
-    st.title("🤖 プロンプトテスト")
-    st.markdown("このアプリは、フランケンラジオAIのプロンプトテストが出来ます。")
+    st.title("🤖 プロンプトテスト (チャット版)")
+    st.markdown("このアプリは、フランケンラジオAIとチャット形式で会話ができます。")
     st.markdown("---")
     
     try:
@@ -161,40 +169,88 @@ def main():
     if llama_index:
         st.sidebar.header("⚙️ 高度な設定")
         n_value = st.sidebar.slider("類似ドキュメント検索数 (N値)", 1, 10, 3, 1)
-        custom_prompt_text = st.sidebar.text_area("カスタムQAプロンプト:", DEFAULT_QA_PROMPT, height=350)
+        custom_prompt_text = st.sidebar.text_area("カスタムコンテキストプロンプト:", DEFAULT_CONTEXT_PROMPT, height=350)
 
-        st.header("💬 質問を入力してください")
-        user_query = st.text_input("フランケンAIに聞きたいことを入力:", key="user_query_input")
+        st.header("💬 フランケンAIとチャット")
 
-        if user_query and user_query != st.session_state.last_query:
-            st.session_state.last_query = user_query
+        # [変更] 会話履歴をループで表示 
+        for message in st.session_state.messages:
+            with st.chat_message(message["role"]):
+                st.markdown(message["content"])
+
+        # [変更] 入力ウィジェットをst.chat_inputに変更 
+        if prompt := st.chat_input("フランケンAIに聞きたいことを入力:"):
+            # [追加] 会話IDがなければ新規作成 
+            if not st.session_state.conversation_id:
+                st.session_state.conversation_id = str(uuid.uuid4())
+            
+            # [追加] ユーザーのメッセージを履歴に追加して表示
+            st.session_state.messages.append({"role": "user", "content": prompt})
+            with st.chat_message("user"):
+                st.markdown(prompt)
+
+            # [変更] ターンごとのIDを生成 
+            turn_id = str(uuid.uuid4())
+            st.session_state.request_id = turn_id
+            
+            # [変更] ユーザー質問ログに会話IDとターンIDを追加 
+            log_extra_user = {
+                'json_fields': {
+                    'conversation_id': st.session_state.conversation_id,
+                    'request_id': turn_id,
+                    'query': prompt
+                }
+            }
+            logger.info("新しいクエリの処理を開始します。", extra=log_extra_user)
+
+            # [追加] AIの応答を待つ間のプレースホルダー
+            with st.chat_message("assistant"):
+                message_placeholder = st.empty()
+                
+                # LLMから応答を取得
+                response_obj = get_chat_response(
+                    index=llama_index,
+                    query=prompt,
+                    chat_history=st.session_state.messages[:-1], # 最新の質問は除く
+                    n_value=n_value,
+                    custom_context_prompt_str=custom_prompt_text
+                )
+
+                if response_obj:
+                    full_response = str(response_obj)
+                    message_placeholder.markdown(full_response)
+                    st.session_state.last_response_obj = response_obj
+                    
+                    # [変更] AI回答ログに会話IDとターンIDを追加 
+                    log_extra_assistant = {
+                        'json_fields': {
+                            'conversation_id': st.session_state.conversation_id,
+                            'request_id': turn_id,
+                            'response': full_response
+                        }
+                    }
+                    logger.info("LLMからの回答を記録しました。", extra=log_extra_assistant)
+                    # [追加] AIの応答を履歴に追加
+                    st.session_state.messages.append({"role": "assistant", "content": full_response})
+                else:
+                    error_message = "エラーにより回答を生成できませんでした。"
+                    message_placeholder.error(error_message)
+                    log_extra_error = {
+                        'json_fields': {
+                            'conversation_id': st.session_state.conversation_id,
+                            'request_id': turn_id,
+                        }
+                    }
+                    logger.error("LLMからの応答がありませんでした。", extra=log_extra_error)
+                    st.session_state.messages.append({"role": "assistant", "content": error_message})
+
             st.session_state.feedback_submitted = False
-            
-            # ★ 新しい質問が来たので、新しいリクエストIDを生成
-            st.session_state.request_id = str(uuid.uuid4())
-            
-            # ★ extra に辞書を渡すことで、構造化ログとしてIDを記録
-            log_extra = {'json_fields': {'request_id': st.session_state.request_id, 'query': user_query}}
-            logger.info("新しいクエリの処理を開始します。", extra=log_extra)
+            st.rerun()
 
-            response = get_response_from_llm(llama_index, user_query, n_value, custom_prompt_text)
-
-            if response:
-                st.session_state.last_response = str(response)
-                st.session_state.source_nodes = response.source_nodes
-                # ★ ログにリクエストIDを付与
-                logger.info(f"LLMからの回答を記録しました。", extra={'json_fields': {'request_id': st.session_state.request_id, 'response': str(response)}})
-            else:
-                st.session_state.last_response = ""
-                st.session_state.source_nodes = []
-                logger.error("LLMからの応答がありませんでした。", extra={'json_fields': {'request_id': st.session_state.request_id}})
-
-        if st.session_state.last_response:
-            st.subheader("🤖 AIからの回答")
-            st.write(st.session_state.last_response)
-
+        # [変更] 最新のAI応答に対してのみソースとフィードバックフォームを表示
+        if st.session_state.last_response_obj:
             with st.expander("参照されたソースを確認"):
-                for i, node in enumerate(st.session_state.source_nodes):
+                for i, node in enumerate(st.session_state.last_response_obj.source_nodes):
                     st.markdown(f"--- **ソース {i+1} (関連度: {node.score:.4f})** ---")
                     st.text_area("", value=node.text, height=150, disabled=True, key=f"chunk_{i}")
 
@@ -215,18 +271,23 @@ def main():
                     submit_button = st.form_submit_button(label='フィードバックを送信')
 
                     if submit_button:
-                        # ★ 感想ログにもリクエストIDを付与
+                        # [変更] 感想ログに会話IDとターンIDを追加 
+                        last_user_message = st.session_state.messages[-2] if len(st.session_state.messages) > 1 else {}
+                        last_assistant_message = st.session_state.messages[-1] if st.session_state.messages else {}
+                        
                         feedback_log_extra = {
                             'json_fields': {
+                                'conversation_id': st.session_state.conversation_id,
                                 'request_id': st.session_state.request_id,
-                                'query': st.session_state.last_query,
-                                'response': st.session_state.last_response,
+                                'query': last_user_message.get('content', ''),
+                                'response': last_assistant_message.get('content', ''),
                                 'ratings': ratings,
                                 'comment': feedback_comment
                             }
                         }
                         logger.info("ユーザーからの感想を記録しました。", extra=feedback_log_extra)
                         st.session_state.feedback_submitted = True
+                        st.session_state.last_response_obj = None # フィードバック送信後は一旦クリア
                         st.rerun()
 
 if __name__ == "__main__":
