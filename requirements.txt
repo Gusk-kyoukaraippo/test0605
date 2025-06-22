@@ -5,3 +5,4 @@ llama-index-embeddings-google-genai
 llama_index.embeddings.openai
 google.cloud
 google-cloud-storage
+google-cloud-logging
