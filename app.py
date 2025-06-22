@@ -21,6 +21,26 @@ from google.cloud import storage
 # --- ページ設定 (最初に一度だけ呼び出す) ---
 st.set_page_config(page_title="フランケンAIプロンプトテスト", layout="wide")
 
+# --- ロギング設定 ---
+LOG_FILE = "app.log"
+# 日本語を含むログメッセージを正しくファイルに出力するために encoding='utf-8' を指定
+# Streamlitの再実行時にハンドラーが重複して追加されるのを防ぐため、ロガーの既存ハンドラーをクリア
+logger = logging.getLogger(__name__)
+if not logger.handlers: # ハンドラーがまだ設定されていない場合のみ設定
+    logger.setLevel(logging.INFO)
+    formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+    
+    # ファイルハンドラー
+    fh = logging.FileHandler(LOG_FILE, encoding='utf-8')
+    fh.setFormatter(formatter)
+    logger.addHandler(fh)
+    
+    # ストリームハンドラー (コンソール出力)
+    sh = logging.StreamHandler()
+    sh.setFormatter(formatter)
+    logger.addHandler(sh)
+
+
 # --- 定数定義 ---
 LOCAL_INDEX_DIR = "downloaded_storage_openai_embed" # インデックス保存ディレクトリ名を変更し、区別します
 DEFAULT_QA_PROMPT = """
