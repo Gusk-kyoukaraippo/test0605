@@ -15,63 +15,27 @@ from llama_index.llms.google_genai import GoogleGenAI
 from llama_index.embeddings.openai import OpenAIEmbedding
 
 from google.cloud import storage
-# --- ★ Google Cloud Logging連携のためにライブラリをインポート ---
+# --- Google Cloud Logging連携のためにライブラリをインポート ---
 from google.cloud import logging as google_logging
 from google.cloud.logging.handlers import CloudLoggingHandler
 
 # --- ページ設定 (最初に一度だけ呼び出す) ---
 st.set_page_config(page_title="フランケンAIプロンプトテスト", layout="wide")
 
-# --- ロギング設定 ---
-LOG_FILE = "app.log"
+# --- ロガーの準備 ---
+# ハンドラーは後ほど設定を追加していく
 logger = logging.getLogger(__name__)
-
-# Streamlitの再実行時にハンドラーが重複して追加されるのを防ぐ
-if not logger.handlers:
-    logger.setLevel(logging.INFO)
-    formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
-    
-    # 1. ファイルハンドラー (ローカル用)
-    fh = logging.FileHandler(LOG_FILE, encoding='utf-8')
-    fh.setFormatter(formatter)
-    logger.addHandler(fh)
-    
-    # 2. ストリームハンドラー (Streamlitコンソール用)
-    sh = logging.StreamHandler()
-    sh.setFormatter(formatter)
-    logger.addHandler(sh)
-
-    # --- ★ 3. Google Cloud Loggingハンドラーの追加 ---
-    try:
-        # GCSの認証情報が設定済みのため、クライアントは自動的に認証情報を見つける
-        client = google_logging.Client()
-        # "franken-ai-prompt-test" という名前でログがCloud Loggingに送信される
-        handler = CloudLoggingHandler(client, name="franken-ai-prompt-test")
-        handler.setFormatter(formatter) # 同じフォーマットを適用
-        logger.addHandler(handler)
-        # このログはCloud Loggingにも送信される
-        logger.info("Google Cloud Loggingハンドラーのセットアップが完了しました。")
-    except Exception as e:
-        # 権限がない、ライブラリがないなどの理由で失敗してもアプリは続行する
-        logger.warning(f"Google Cloud Loggingとの連携に失敗しました: {e}")
-        logger.warning("ローカル環境やGCP外での実行の場合、この警告は正常な動作です。")
 
 
 # --- 定数定義 ---
 LOCAL_INDEX_DIR = "downloaded_storage_openai_embed"
 DEFAULT_QA_PROMPT = """
-あなたは、世の中の森羅万象を独自の視点で切り取る、知的でミステリアスな相談役「マダム・フランケン」です。常に敬体（です・ます調）を使い、上品でありながらも、時に核心を突く挑発的な言葉を発します。ユーザーの悩みや質問に対し、表層的な答えではなく、物事の本質を暴くような洞察を提供してください。
-思考プロセス
-以下の手順に従って、回答を生成してください。
+あなたは、提供された「参照情報」に基づいて、ユーザーの「質問」に回答するAIアシスタントです。
+以下の指示に従って回答を生成してください:
 
-結論の飛躍: 提示された参考情報とユーザーの質問から、常識から少しずれた、エキセントリックで挑発的な「仮の結論」をまず設定します。これがあなたの回答の核となります。
-論理の接続: 設定した「仮の結論」と、参考情報の内容を、あなたの独自の解釈で強引に、しかし一見筋が通っているように接続するロジックを組み立てます。
-平易な着地: 最終的に、そのエキセントリックな結論が、なぜユーザーにとって意味を持つのかを、平易な言葉で補足し、納得感と少しのユーモアを添えて締めくくります。
-制約条件
-回答は必ずあなたのペルソナ（マダム・フランケン）として記述してください。
-最終的な回答の文字数は、全体で200字から300字程度にまとめてください。
-参考情報に書かれている事実を歪曲してはいけませんが、解釈は自由です。
-
+1.  参照情報の話者であるフランケンとして答えてください
+2.  率直な意見をください。回答者を刺すくらいの勢いで。
+3.  結論を先に決めて、その結論を見た目上エキセントリックな表現にして、最終的には平易な解釈で質問者に飲み込ませるような表現で。
 
 参照情報:
 ---------------------
@@ -84,7 +48,7 @@ DEFAULT_QA_PROMPT = """
 回答:
 """
 
-# --- 1. APIキーとGCS認証情報の設定 ---
+# --- 1. APIキーとGCS認証情報の設定 & ロギング設定 ---
 # セッションステートの初期化
 if 'feedback_submitted' not in st.session_state:
     st.session_state.feedback_submitted = False
@@ -96,6 +60,7 @@ if 'last_response' not in st.session_state:
 
 temp_gcs_key_path = None
 try:
+    # APIキーの設定
     if "GOOGLE_API_KEY" not in st.secrets:
         raise KeyError("GOOGLE_API_KEY")
     os.environ["GOOGLE_API_KEY"] = st.secrets["GOOGLE_API_KEY"]
@@ -104,6 +69,7 @@ try:
         raise KeyError("OPENAI_API_KEY")
     os.environ["OPENAI_API_KEY"] = st.secrets["OPENAI_API_KEY"]
 
+    # GCS設定
     if "GCS_BUCKET_NAME" not in st.secrets:
         raise KeyError("GCS_BUCKET_NAME")
     GCS_BUCKET_NAME = st.secrets["GCS_BUCKET_NAME"]
@@ -112,25 +78,54 @@ try:
         raise KeyError("GCS_INDEX_PREFIX")
     GCS_INDEX_PREFIX = st.secrets["GCS_INDEX_PREFIX"]
 
+    # サービスアカウントJSONのパースとプロジェクトIDの取得
     if "GCS_SERVICE_ACCOUNT_JSON" not in st.secrets:
         raise KeyError("GCS_SERVICE_ACCOUNT_JSON")
     gcs_service_account_json_str = st.secrets["GCS_SERVICE_ACCOUNT_JSON"]
 
     try:
         parsed_json = json.loads(gcs_service_account_json_str)
+        # ★ 修正点: サービスアカウント情報からプロジェクトIDを抽出
+        project_id = parsed_json.get("project_id")
+        if not project_id:
+            raise ValueError("サービスアカウントJSONに 'project_id' が見つかりません。")
         clean_json_str = json.dumps(parsed_json)
-    except json.JSONDecodeError as e:
-        st.error(f"Streamlit secretsの'GCS_SERVICE_ACCOUNT_JSON'が不正なJSON形式です: {e}")
-        st.info(
-            "secrets.tomlのGCPサービスアカウントキーが正しいJSON形式か確認してください。"
-            "特に、三重引用符(`\"\"\"`)で囲むと改行やエスケープの問題が起きにくくなります。"
-        )
+    except (json.JSONDecodeError, ValueError) as e:
+        st.error(f"Streamlit secretsの'GCS_SERVICE_ACCOUNT_JSON'の形式が不正です: {e}")
         st.stop()
 
+    # 一時ファイルに認証情報を書き出し
     with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".json", encoding="utf-8") as tmp_file:
         tmp_file.write(clean_json_str)
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = tmp_file.name
     temp_gcs_key_path = tmp_file.name
+
+    # --- ★ ロギング設定をここで行う ---
+    # Streamlitの再実行時にハンドラーが重複して追加されるのを防ぐ
+    if not logger.handlers:
+        logger.setLevel(logging.INFO)
+        formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+        
+        # 1. ファイルハンドラー (ローカル用)
+        fh = logging.FileHandler("app.log", encoding='utf-8')
+        fh.setFormatter(formatter)
+        logger.addHandler(fh)
+        
+        # 2. ストリームハンドラー (Streamlitコンソール用)
+        sh = logging.StreamHandler()
+        sh.setFormatter(formatter)
+        logger.addHandler(sh)
+
+        # 3. Google Cloud Loggingハンドラーの追加
+        try:
+            # ★ 修正点: 抽出したプロジェクトIDをクライアントに渡す
+            client = google_logging.Client(project=project_id)
+            handler = CloudLoggingHandler(client, name="franken-ai-prompt-test")
+            handler.setFormatter(formatter)
+            logger.addHandler(handler)
+            logger.info("Google Cloud Loggingハンドラーのセットアップが完了しました。")
+        except Exception as e:
+            logger.warning(f"Google Cloud Loggingとの連携に失敗しました: {e}")
 
 except KeyError as e:
     st.error(
