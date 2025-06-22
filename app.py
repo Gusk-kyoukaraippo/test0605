@@ -3,7 +3,7 @@ import shutil
 import streamlit as st
 import json
 import tempfile
-import logging # ロギングモジュールをインポート
+import logging
 from llama_index.core import (
     VectorStoreIndex,
     StorageContext,
@@ -15,29 +15,46 @@ from llama_index.llms.google_genai import GoogleGenAI
 from llama_index.embeddings.openai import OpenAIEmbedding
 
 from google.cloud import storage
+# --- ★ Google Cloud Logging連携のためにライブラリをインポート ---
+from google.cloud import logging as google_logging
+from google.cloud.logging.handlers import CloudLoggingHandler
 
 # --- ページ設定 (最初に一度だけ呼び出す) ---
 st.set_page_config(page_title="フランケンAIプロンプトテスト", layout="wide")
 
 # --- ロギング設定 ---
 LOG_FILE = "app.log"
-# 日本語を含むログメッセージを正しくファイルに出力するために encoding='utf-8' を指定
-# Streamlitの再実行時にハンドラーが重複して追加されるのを防ぐため、ロガーの既存ハンドラーをクリア
 logger = logging.getLogger(__name__)
-if not logger.handlers: # ハンドラーがまだ設定されていない場合のみ設定
+
+# Streamlitの再実行時にハンドラーが重複して追加されるのを防ぐ
+if not logger.handlers:
     logger.setLevel(logging.INFO)
     formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
     
-    # ファイルハンドラー
-    # 日本語を扱うため encoding='utf-8' を指定
+    # 1. ファイルハンドラー (ローカル用)
     fh = logging.FileHandler(LOG_FILE, encoding='utf-8')
     fh.setFormatter(formatter)
     logger.addHandler(fh)
     
-    # ストリームハンドラー (コンソール出力)
+    # 2. ストリームハンドラー (Streamlitコンソール用)
     sh = logging.StreamHandler()
     sh.setFormatter(formatter)
     logger.addHandler(sh)
+
+    # --- ★ 3. Google Cloud Loggingハンドラーの追加 ---
+    try:
+        # GCSの認証情報が設定済みのため、クライアントは自動的に認証情報を見つける
+        client = google_logging.Client()
+        # "franken-ai-prompt-test" という名前でログがCloud Loggingに送信される
+        handler = CloudLoggingHandler(client, name="franken-ai-prompt-test")
+        handler.setFormatter(formatter) # 同じフォーマットを適用
+        logger.addHandler(handler)
+        # このログはCloud Loggingにも送信される
+        logger.info("Google Cloud Loggingハンドラーのセットアップが完了しました。")
+    except Exception as e:
+        # 権限がない、ライブラリがないなどの理由で失敗してもアプリは続行する
+        logger.warning(f"Google Cloud Loggingとの連携に失敗しました: {e}")
+        logger.warning("ローカル環境やGCP外での実行の場合、この警告は正常な動作です。")
 
 
 # --- 定数定義 ---
@@ -50,11 +67,11 @@ DEFAULT_QA_PROMPT = """
 結論の飛躍: 提示された参考情報とユーザーの質問から、常識から少しずれた、エキセントリックで挑発的な「仮の結論」をまず設定します。これがあなたの回答の核となります。
 論理の接続: 設定した「仮の結論」と、参考情報の内容を、あなたの独自の解釈で強引に、しかし一見筋が通っているように接続するロジックを組み立てます。
 平易な着地: 最終的に、そのエキセントリックな結論が、なぜユーザーにとって意味を持つのかを、平易な言葉で補足し、納得感と少しのユーモアを添えて締めくくります。
-
 制約条件
 回答は必ずあなたのペルソナ（マダム・フランケン）として記述してください。
 最終的な回答の文字数は、全体で200字から300字程度にまとめてください。
 参考情報に書かれている事実を歪曲してはいけませんが、解釈は自由です。
+
 
 参照情報:
 ---------------------
@@ -253,7 +270,6 @@ def main():
             key="user_query_input"
         )
 
-        # ユーザーが新しい質問を入力したら、フィードバック状態をリセット
         if user_query and user_query != st.session_state.last_query:
             st.session_state.feedback_submitted = False
             st.session_state.last_query = user_query
@@ -262,7 +278,6 @@ def main():
             if "{context_str}" not in custom_prompt_text or "{query_str}" not in custom_prompt_text:
                 st.warning("プロンプトには`{context_str}`と`{query_str}`の両方を含めてください。")
             else:
-                # --- ここからロギング処理 ---
                 logger.info("="*50)
                 logger.info("新しいクエリの処理を開始します。")
                 logger.info(f"[入力文] {user_query}")
@@ -278,7 +293,6 @@ def main():
                     
                     logger.info(f"[LLMからの回答] {str(response)}")
 
-                    # 参照ソースの表示とロギング
                     if response.source_nodes:
                         logger.info("--- 選択されたチャンク（回答根拠） ---")
                         with st.expander("参照されたソースを確認"):
@@ -292,13 +306,11 @@ def main():
                                     disabled=True,
                                     key=f"chunk_{i}"
                                 )
-                                # ログに記録
                                 logger.info(f"[{source_text}] {node.text.replace('\n', ' ')}")
                         logger.info("--- チャンクのログ記録終了 ---")
                     else:
                         logger.warning("参照されたソースノードが見つかりませんでした。")
 
-                    # --- ユーザーからの感想を収集するUI (更新箇所) ---
                     st.markdown("---")
                     st.subheader("📝 この回答についての感想")
 
@@ -309,7 +321,7 @@ def main():
                             st.write("各項目について5段階で評価してください。")
                             
                             busso_doai = st.slider("1. 物騒度合い (1: 穏やか 〜 5: 過激)", 1, 5, 3)
-                            datousei = st.slider("2. 質問に対する返答のピント (1: 不適切 〜 5: 完璧)", 1, 5, 3)
+                            datousei = st.slider("2. 質問への返答の妥当性 (1: 不適切 〜 5: 完璧)", 1, 5, 3)
                             igaisei = st.slider("3. 意外性 (1: 予測通り 〜 5: 驚き)", 1, 5, 3)
                             humor = st.slider("4. ユーモア (1: 皆無 〜 5: 爆笑)", 1, 5, 3)
 
@@ -320,7 +332,6 @@ def main():
                             submit_button = st.form_submit_button(label='フィードバックを送信')
 
                             if submit_button:
-                                # --- 感想のロギング (更新箇所) ---
                                 logger.info("--- ユーザーからの感想 ---")
                                 logger.info(f"[対象の質問] {st.session_state.last_query}")
                                 logger.info(f"[対象の回答] {st.session_state.last_response}")
@@ -332,7 +343,7 @@ def main():
                                 logger.info("--- 感想のログ記録終了 ---")
                                 
                                 st.session_state.feedback_submitted = True
-                                st.rerun() # フォームを消して「記録しました」メッセージを表示
+                                st.rerun()
                 else:
                     logger.error("LLMからの応答がありませんでした。")
 
